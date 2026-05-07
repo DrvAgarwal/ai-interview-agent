@@ -7,6 +7,10 @@ export function middleware(request: NextRequest) {
     const { pathname } = request.nextUrl;
 
     const isAuthPage = pathname.startsWith("/sign-in") || pathname.startsWith("/sign-up");
+    const isProtected = pathname.startsWith("/interview") || 
+                        pathname.startsWith("/analytics") || 
+                        pathname.startsWith("/leaderboard") ||
+                        pathname.startsWith("/practice");
     const isLoggedIn = session || uid;
 
     // If logged in and on auth page → go home
@@ -14,7 +18,11 @@ export function middleware(request: NextRequest) {
         return NextResponse.redirect(new URL("/", request.url));
     }
 
-    // Allow everything else
+    // If NOT logged in and on protected page → go to sign-in
+    if (!isLoggedIn && isProtected) {
+        return NextResponse.redirect(new URL("/sign-in", request.url));
+    }
+
     return NextResponse.next();
 }
 
