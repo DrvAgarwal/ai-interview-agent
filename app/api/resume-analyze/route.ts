@@ -2,67 +2,105 @@ import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
+function extractTextFromPDF(buffer: Buffer): string {
+    const content = buffer.toString("latin1");
+    let text = "";
+    const btEtMatches = content.match(/BT[\s\S]*?ET/g) || [];
+    for (const block of btEtMatches) {
+        const parentheses = block.match(/\(([^)\\]|\\.)*\)/g) || [];
+        for (const p of parentheses) {
+            const str = p.slice(1, -1)
+                .replace(/\\n/g, " ").replace(/\\r/g, " ")
+                .replace(/[^\x20-\x7E]/g, "");
+            if (str.trim().length > 0) text += str + " ";
+        }
+    }
+    if (text.trim().length < 100) {
+        text = content.replace(/[^\x20-\x7E\n\r]/g, " ").replace(/\s{2,}/g, " ").trim();
+    }
+    return text.substring(0, 4000);
+}
+
 export async function POST(req: NextRequest) {
     try {
         const formData = await req.formData();
         const file = formData.get("resume") as File | null;
-
-        if (!file) {
-            return NextResponse.json({ error: "No file" }, { status: 400 });
-        }
+        if (!file) return NextResponse.json({ error: "No file" }, { status: 400 });
 
         const arrayBuffer = await file.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
-        const text = buffer.toString("latin1")
-            .replace(/[^\x20-\x7E\n]/g, " ")
-            .replace(/\s+/g, " ")
-            .toLowerCase();
+        const resumeText = extractTextFromPDF(buffer);
 
-        const allSkills = [
-            "javascript", "typescript", "python", "java", "c++", "c#", "php",
-            "ruby", "swift", "kotlin", "go", "rust", "scala", "r", "matlab",
-            "react", "angular", "vue", "next.js", "nuxt", "svelte",
-            "node.js", "express", "django", "flask", "spring", "laravel",
-            "html", "css", "tailwind", "bootstrap", "sass", "scss",
-            "sql", "mysql", "postgresql", "mongodb", "firebase", "redis",
-            "aws", "azure", "gcp", "docker", "kubernetes", "linux",
-            "git", "github", "gitlab", "jenkins", "ci/cd", "devops",
-            "machine learning", "deep learning", "tensorflow", "pytorch",
-            "pandas", "numpy", "scikit", "opencv", "nlp", "ai",
-            "figma", "photoshop", "illustrator", "xd", "sketch",
-            "agile", "scrum", "jira", "rest api", "graphql",
-            "android", "ios", "flutter", "dart", "react native",
-            "excel", "powerpoint", "word", "tableau", "power bi",
-            "selenium", "jest", "cypress", "testing", "unit test",
-        ];
+        console.log("📄 PDF text length:", resumeText.length);
 
-        const foundSkills = allSkills
-            .filter(skill => text.includes(skill.toLowerCase()))
-            .map(s => s.charAt(0).toUpperCase() + s.slice(1));
+        if (resumeText.trim().length < 30) {
+            return NextResponse.json({
+                skills: ["PDF not readable"],
+                experience: [],
+                education: [],
+                summary: "Could not read PDF text. Use a text-based PDF."
+            });
+        }
 
-        const uniqueSkills = [...new Set(foundSkills)];
+        const apiKey = process.env.OPENAI_API_KEY;
+        console.log("🔑 OpenAI key exists:", !!apiKey);
 
-        // Detect name from filename
-        const fileName = file.name.replace(".pdf", "").replace(/_/g, " ").replace(/-/g, " ");
+        const response = await fetch("https://api.openai.com/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+                model: "gpt-3.5-turbo",
+                messages: [
+                    {
+                        role: "system",
+                        content: "You are an expert resume parser. Extract information accurately and return only valid JSON."
+                    },
+                    {
+                        role: "user",
+                        content: `Parse this resume and return ONLY this JSON (no markdown):
 
-        const summary = uniqueSkills.length > 0
-            ? `Skilled professional with expertise in ${uniqueSkills.slice(0, 4).join(", ")} and more. Resume analyzed successfully — your interview will be personalized.`
-            : `Professional resume uploaded successfully. Interview questions will be tailored to your background.`;
+RESUME:
+${resumeText}
 
-        return NextResponse.json({
-            skills: uniqueSkills.length > 0 ? uniqueSkills.slice(0, 20) : ["Software Development", "Problem Solving", "Communication"],
-            experience: ["Experience details from resume"],
-            education: ["Education details from resume"],
-            summary,
+{
+  "skills": ["every skill, language, framework, tool mentioned"],
+  "experience": ["Job Title at Company (year-year)"],
+  "education": ["Degree, Institution (year)"],
+  "summary": "2-3 sentence professional summary based on actual resume content"
+}`
+                    }
+                ],
+                temperature: 0.1,
+                max_tokens: 1000,
+            }),
         });
+
+        console.log("🤖 OpenAI status:", response.status);
+
+        if (!response.ok) {
+            const err = await response.text();
+            console.error("OpenAI error:", err);
+            throw new Error(`OpenAI: ${response.status}`);
+        }
+
+        const data = await response.json();
+        const aiText = data.choices?.[0]?.message?.content || "";
+        console.log("✅ AI Response:", aiText.substring(0, 200));
+
+        let cleaned = aiText.replace(/```json/g, "").replace(/```/g, "").trim();
+        const start = cleaned.indexOf("{");
+        const end = cleaned.lastIndexOf("}");
+        if (start !== -1 && end !== -1) cleaned = cleaned.substring(start, end + 1);
+
+        const parsed = JSON.parse(cleaned);
+        console.log("✅ Skills found:", parsed.skills?.length);
+        return NextResponse.json(parsed);
 
     } catch (error) {
-        console.error("Resume error:", error);
-        return NextResponse.json({
-            skills: ["Software Development", "Communication", "Problem Solving"],
-            experience: ["Professional Experience"],
-            education: ["Educational Background"],
-            summary: "Resume uploaded successfully. Interview will be personalized."
-        });
+        console.error("❌ Resume error:", error);
+        return NextResponse.json({ error: "Failed to analyze" }, { status: 500 });
     }
 }

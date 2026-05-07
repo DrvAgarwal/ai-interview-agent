@@ -1,45 +1,31 @@
-import { redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/actions/auth.action";
-import { getInterviewsByUserId, getFeedbackByInterviewId } from "@/lib/actions/general.action";
+"use client";
+import { useEffect, useState } from "react";
 import AnalyticsDashboard from "@/components/AnalyticsDashboard";
 
-export default async function AnalyticsPage() {
-    const user = await getCurrentUser();
-    if (!user) redirect("/sign-in");  // try-catch ke bahar rakha
+export default function AnalyticsPage() {
+    const [interviews, setInterviews] = useState([]);
+    const [loading, setLoading] = useState(true);
 
-    let interviewsWithFeedback: any[] = [];
-
-    try {
-        const result = await getInterviewsByUserId(user.id);
-        const interviews = result?.data ?? [];
-
-        interviewsWithFeedback = await Promise.all(
-            interviews.map(async (interview) => {
-                try {
-                    const feedbackResult = await getFeedbackByInterviewId({
-                        interviewId: interview.id,
-                        userId: user.id,
-                    });
-                    return {
-                        ...interview,
-                        feedback: feedbackResult?.data ?? null,
-                    };
-                } catch {
-                    return { ...interview, feedback: null };
-                }
-            })
-        );
-    } catch (error) {
-        console.error("Analytics fetch error:", error);
-    }
+    useEffect(() => {
+        fetch("/api/analytics")
+            .then(r => r.json())
+            .then(data => { setInterviews(data.interviews || []); setLoading(false); })
+            .catch(() => setLoading(false));
+    }, []);
 
     return (
-        <div className="p-6 max-w-5xl mx-auto">
-            <h1 className="text-3xl font-bold text-white mb-2">📊 Your Analytics</h1>
-            <p className="text-gray-400 mb-8">
+        <div style={{ minHeight: "100vh", padding: "40px 24px", maxWidth: "1000px", margin: "0 auto" }}>
+            <h1 style={{ color: "white", fontSize: "28px", fontWeight: "bold", marginBottom: "8px" }}>
+                📊 Your Analytics
+            </h1>
+            <p style={{ color: "#9ca3af", marginBottom: "32px" }}>
                 Track your progress and identify areas for improvement.
             </p>
-            <AnalyticsDashboard interviews={interviewsWithFeedback} />
+            {loading ? (
+                <p style={{ color: "white" }}>Loading...</p>
+            ) : (
+                <AnalyticsDashboard interviews={interviews} />
+            )}
         </div>
     );
 }
